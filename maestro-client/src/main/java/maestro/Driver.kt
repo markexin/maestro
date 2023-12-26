@@ -87,9 +87,11 @@ interface Driver {
 
     fun waitUntilScreenIsStatic(timeoutMs: Long): Boolean
 
-    fun waitForAppToSettle(initialHierarchy: ViewHierarchy?, appId: String?): ViewHierarchy?
+    fun waitForAppToSettle(initialHierarchy: ViewHierarchy?, appId: String?, timeoutMs: Int? = null): ViewHierarchy?
 
     fun capabilities(): List<Capability>
 
     fun setPermissions(appId: String, permissions: Map<String, String>)
+
+    fun addMedia(mediaFiles: List<File>)
 }

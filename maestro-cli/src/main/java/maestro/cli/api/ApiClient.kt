@@ -244,6 +244,7 @@ class ApiClient(
         maxRetryCount: Int = 3,
         completedRetries: Int = 0,
         disableNotifications: Boolean,
+        deviceLocale: String? = null,
         progressListener: (totalBytes: Long, bytesWritten: Long) -> Unit = { _, _ -> },
     ): UploadResponse {
         if (appBinaryId == null && appFile == null) throw CliError("Missing required parameter for option '--app-file' or '--app-binary-id'")
@@ -264,6 +265,7 @@ class ApiClient(
         androidApiLevel?.let { requestPart["androidApiLevel"] = it }
         iOSVersion?.let { requestPart["iOSVersion"] = it }
         appBinaryId?.let { requestPart["appBinaryId"] = it }
+        deviceLocale?.let { requestPart["deviceLocale"] = it }
         if (includeTags.isNotEmpty()) requestPart["includeTags"] = includeTags
         if (excludeTags.isNotEmpty()) requestPart["excludeTags"] = excludeTags
         if (disableNotifications) requestPart["disableNotifications"] = true
@@ -312,6 +314,7 @@ class ApiClient(
                 progressListener = progressListener,
                 appBinaryId = appBinaryId,
                 disableNotifications = disableNotifications,
+                deviceLocale = deviceLocale,
             )
         }
 
@@ -346,15 +349,21 @@ class ApiClient(
             val teamId = analysisRequest["teamId"] as String
             val appId = responseBody["targetId"] as String
             val appBinaryIdResponse = responseBody["appBinaryId"] as? String
-            val deviceInfoStr = responseBody["deviceInfo"] as? String
+            val deviceInfoStr = responseBody["deviceInfo"] as? Map<String, Any>
 
-            val deviceInfo = runCatching {
-                if (responseBody["deviceInfo"] != null) JSON.readValue(deviceInfoStr, DeviceInfo::class.java) else null
-            }.getOrNull()
+            val deviceInfo = deviceInfoStr?.let {
+                DeviceInfo(
+                    platform = it["platform"] as String,
+                    displayInfo = it["displayInfo"] as String,
+                    isDefaultOsVersion = it["isDefaultOsVersion"] as Boolean,
+                    deviceLocale = responseBody["deviceLocale"] as String
+                )
+            }
 
             return UploadResponse(teamId, appId, uploadId, appBinaryIdResponse, deviceInfo)
         }
     }
+
 
     private inline fun <reified T> post(path: String, body: Any): Result<T, Response> {
         val bodyBytes = JSON.writeValueAsBytes(body)
@@ -418,7 +427,8 @@ data class UploadResponse(
 data class DeviceInfo(
     val platform: String,
     val displayInfo: String,
-    val isDefaultOsVersion: Boolean
+    val isDefaultOsVersion: Boolean,
+    val deviceLocale: String,
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -433,6 +443,7 @@ data class UploadStatus(
         val name: String,
         val status: Status,
         val errors: List<String>,
+        val cancellationReason: CancellationReason? = null
     )
 
     enum class Status {
@@ -442,6 +453,13 @@ data class UploadStatus(
         ERROR,
         CANCELED,
         WARNING,
+    }
+
+    enum class CancellationReason {
+        BENCHMARK_DEPENDENCY_FAILED,
+        INFRA_ERROR,
+        OVERLAPPING_BENCHMARK,
+        TIMEOUT
     }
 }
 

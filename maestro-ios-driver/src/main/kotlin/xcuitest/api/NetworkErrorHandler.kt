@@ -8,9 +8,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import util.PrintUtils
 import xcuitest.XCTestClient
 import xcuitest.api.NetworkException.Companion.toUserNetworkException
-import xcuitest.installer.Source
 import xcuitest.installer.XCTestInstaller
-import kotlin.math.log
 
 class NetworkErrorHandler(
     private val xcTestInstaller: XCTestInstaller,
@@ -21,14 +19,15 @@ class NetworkErrorHandler(
 
     companion object {
         const val RETRY_RESPONSE_CODE = 503
-        private const val NO_RETRY_RESPONSE_CODE = 502
+        const val NO_RETRY_RESPONSE_CODE = 502
         private const val MAX_RETRY = 5
         private val mapper = jacksonObjectMapper()
     }
 
     fun getRetrialResponse(networkException: NetworkException, request: Request): Response {
         val userNetworkModel = networkException.toUserNetworkException()
-        val json = mapper.writeValueAsString(userNetworkModel)
+        val error = Error(errorMessage = userNetworkModel.userFriendlyMessage, errorCode = "network-error")
+        val json = mapper.writeValueAsString(error)
         val responseBody = json.toResponseBody("application/json; charset=utf-8".toMediaType())
         logger.info("Got Network exception in network layer: $networkException")
         return if (networkException.shouldRetryDriverInstallation()) {
@@ -68,7 +67,7 @@ class NetworkErrorHandler(
         reInitializeInstaller: (XCTestClient) -> Unit
     ): Response {
         return if (retry < MAX_RETRY) {
-            xcTestInstaller.start(Source.RETRY)?.let {
+            xcTestInstaller.start()?.let {
                 reInitializeInstaller(it)
             }
             response.close()
@@ -97,7 +96,7 @@ class NetworkErrorHandler(
     ): Response {
         logger.info("Got Network exception in application layer: $networkException")
         return if (networkException.shouldRetryDriverInstallation() && retry < MAX_RETRY) {
-            xcTestInstaller.start(Source.RETRY)?.let {
+            xcTestInstaller.start()?.let {
                 reInitializeInstaller(it)
             }
             retry++
@@ -106,7 +105,8 @@ class NetworkErrorHandler(
             chain.call().clone().execute()
         } else {
             val userNetworkException = networkException.toUserNetworkException()
-            val json = mapper.writeValueAsString(userNetworkException)
+            val error = Error(errorMessage = userNetworkException.userFriendlyMessage, errorCode = "network-error")
+            val json = mapper.writeValueAsString(error)
             val responseBody = json.toResponseBody("application/json; charset=utf-8".toMediaType())
             logger.error("⚠️ Error: ${userNetworkException.userFriendlyMessage}")
             PrintUtils.log("⚠️ Error: ${userNetworkException.userFriendlyMessage}")

@@ -13,8 +13,29 @@ import kotlin.io.path.createTempDirectory
 
 object LocalSimulatorUtils {
 
-    data class SimctlError(override val message: String): Throwable(message)
+    data class SimctlError(override val message: String) : Throwable(message)
+
     private val homedir = System.getProperty("user.home")
+
+    private val allPermissions = listOf(
+        "calendar",
+        "camera",
+        "contacts",
+        "faceid",
+        "homekit",
+        "medialibrary",
+        "microphone",
+        "motion",
+        "photos",
+        "reminders",
+        "siri",
+        "speech",
+        "userTracking",
+    )
+
+    private val simctlPermissions = listOf(
+        "location"
+    )
 
     fun list(): SimctlList {
         val command = listOf("xcrun", "simctl", "list", "-j")
@@ -26,27 +47,27 @@ object LocalSimulatorUtils {
     }
 
     fun awaitLaunch(deviceId: String) {
-        MaestroTimer.withTimeout(30000) {
+        MaestroTimer.withTimeout(60000) {
             if (list()
                     .devices
                     .values
                     .flatten()
-                    .find { it.udid == deviceId }
+                    .find { it.udid.equals(deviceId, ignoreCase = true) }
                     ?.state == "Booted"
             ) true else null
         } ?: throw SimctlError("Device $deviceId did not boot in time")
     }
 
-    fun awaitShutdown(deviceId: String) {
-        MaestroTimer.withTimeout(30000) {
+    fun awaitShutdown(deviceId: String, timeoutMs: Long = 60000) {
+        MaestroTimer.withTimeout(timeoutMs) {
             if (list()
                     .devices
                     .values
                     .flatten()
-                    .find { it.udid == deviceId }
-                    ?.state != "Booted"
+                    .find { it.udid.equals(deviceId, ignoreCase = true) }
+                    ?.state == "Shutdown"
             ) true else null
-        } ?: throw SimctlError("Device $deviceId did not boot in time")
+        } ?: throw SimctlError("Device $deviceId did not shutdown in time")
     }
 
     private fun xcodePath(): String {
@@ -56,16 +77,33 @@ object LocalSimulatorUtils {
         return process.inputStream.bufferedReader().readLine()
     }
 
-    fun launchSimulator(deviceId: String) {
+    fun bootSimulator(deviceId: String) {
         runCommand(
             listOf(
                 "xcrun",
                 "simctl",
                 "boot",
                 deviceId
-            )
+            ),
+            waitForCompletion = true
         )
+        awaitLaunch(deviceId)
+    }
 
+    fun shutdownSimulator(deviceId: String) {
+        runCommand(
+            listOf(
+                "xcrun",
+                "simctl",
+                "shutdown",
+                deviceId
+            ),
+            waitForCompletion = true
+        )
+        awaitShutdown(deviceId)
+    }
+
+    fun launchSimulator(deviceId: String) {
         val simulatorPath = "${xcodePath()}/Applications/Simulator.app"
         var exceptionToThrow: Exception? = null
 
@@ -95,27 +133,8 @@ object LocalSimulatorUtils {
     fun reboot(
         deviceId: String,
     ) {
-        runCommand(
-            listOf(
-                "xcrun",
-                "simctl",
-                "shutdown",
-                deviceId
-            ),
-            waitForCompletion = true
-        )
-        awaitShutdown(deviceId)
-
-        runCommand(
-            listOf(
-                "xcrun",
-                "simctl",
-                "boot",
-                deviceId
-            ),
-            waitForCompletion = true
-        )
-        awaitLaunch(deviceId)
+        shutdownSimulator(deviceId)
+        bootSimulator(deviceId)
     }
 
     fun addTrustedCertificate(
@@ -193,7 +212,6 @@ object LocalSimulatorUtils {
         return String(process.inputStream.readBytes()).trimEnd()
     }
 
-
     fun launch(
         deviceId: String,
         bundleId: String,
@@ -263,6 +281,18 @@ object LocalSimulatorUtils {
         )
     }
 
+    fun addMedia(deviceId: String, path: String) {
+        runCommand(
+            listOf(
+                "xcrun",
+                "simctl",
+                "addmedia",
+                deviceId,
+                path
+            )
+        )
+    }
+
     fun clearKeychain(deviceId: String) {
         runCommand(
             listOf(
@@ -297,67 +327,147 @@ object LocalSimulatorUtils {
     }
 
     fun setPermissions(deviceId: String, bundleId: String, permissions: Map<String, String>) {
-        val mutable = permissions.toMutableMap()
-        if (mutable.containsKey("all")) {
-            val value = mutable.remove("all")
+        val permissionsMap = permissions.toMutableMap()
+        if (permissionsMap.containsKey("all")) {
+            val value = permissionsMap.remove("all")
             allPermissions.forEach {
                 when (value) {
-                    "allow" -> mutable.putIfAbsent(it, allowValueForPermission(it))
-                    "deny" -> mutable.putIfAbsent(it, denyValueForPermission(it))
-                    "unset" -> mutable.putIfAbsent(it, "unset")
+                    "allow" -> permissionsMap.putIfAbsent(it, allowValueForPermission(it))
+                    "deny" -> permissionsMap.putIfAbsent(it, denyValueForPermission(it))
+                    "unset" -> permissionsMap.putIfAbsent(it, "unset")
                     else -> throw IllegalArgumentException("Permission 'all' can be set to 'allow', 'deny' or 'unset', not '$value'")
                 }
             }
         }
 
-        val argument = mutable
+        val permissionsArgument = permissionsMap
             .filter { allPermissions.contains(it.key) }
             .map { "${it.key}=${translatePermissionValue(it.value)}" }
             .joinToString(",")
 
-        try {
-            runCommand(
-                listOf(
-                    "$homedir/.maestro/deps/applesimutils",
-                    "--byId",
-                    deviceId,
-                    "--bundle",
-                    bundleId,
-                    "--setPermissions",
-                    argument
+        if (permissionsArgument.isNotEmpty()) {
+            try {
+                runCommand(
+                    listOf(
+                        "$homedir/.maestro/deps/applesimutils",
+                        "--byId",
+                        deviceId,
+                        "--bundle",
+                        bundleId,
+                        "--setPermissions",
+                        permissionsArgument
+                    )
                 )
-            )
-        } catch(e: Exception) {
-            runCommand(
-                listOf(
-                    "applesimutils",
-                    "--byId",
-                    deviceId,
-                    "--bundle",
-                    bundleId,
-                    "--setPermissions",
-                    argument
+            } catch (e: Exception) {
+                runCommand(
+                    listOf(
+                        "applesimutils",
+                        "--byId",
+                        deviceId,
+                        "--bundle",
+                        bundleId,
+                        "--setPermissions",
+                        permissionsArgument
+                    )
                 )
-            )
+            }
         }
+
+        setSimctlPermissions(deviceId, bundleId, permissions)
     }
 
-    private val allPermissions = listOf(
-        "calendar",
-        "camera",
-        "contacts",
-        "faceid",
-        "homekit",
-        "location",
-        "medialibrary",
-        "microphone",
-        "motion",
-        "photos",
-        "reminders",
-        "siri",
-        "speech",
-        "userTracking",
-    )
+    private fun setSimctlPermissions(deviceId: String, bundleId: String, permissions: Map<String, String>) {
+        val permissionsMap = permissions.toMutableMap()
+
+        permissionsMap.remove("all")?.let { value ->
+            val transformedPermissions = simctlPermissions.associateWith { permission ->
+                val newValue = when (value) {
+                    "allow" -> allowValueForPermission(permission)
+                    "deny" -> denyValueForPermission(permission)
+                    "unset" -> "unset"
+                    else -> throw IllegalArgumentException("Permission 'all' can be set to 'allow', 'deny', or 'unset', not '$value'")
+                }
+                newValue
+            }
+
+            permissionsMap.putAll(transformedPermissions)
+        }
+
+
+        permissionsMap
+            .forEach {
+                if (simctlPermissions.contains(it.key)) {
+                    when (it.key) {
+                        // TODO: more simctl supported permissions can be migrated here
+                        "location" -> {
+                            setLocationPermission(deviceId, bundleId, it.value)
+                        }
+                    }
+                }
+            }
+    }
+
+    private fun setLocationPermission(deviceId: String, bundleId: String, value: String) {
+        when (value) {
+            "always" -> {
+                runCommand(
+                    listOf(
+                        "xcrun",
+                        "simctl",
+                        "privacy",
+                        deviceId,
+                        "grant",
+                        "location-always",
+                        bundleId
+                    )
+                )
+            }
+
+            "inuse" -> {
+                runCommand(
+                    listOf(
+                        "xcrun",
+                        "simctl",
+                        "privacy",
+                        deviceId,
+                        "grant",
+                        "location",
+                        bundleId
+                    )
+                )
+            }
+
+            "never" -> {
+                runCommand(
+                    listOf(
+                        "xcrun",
+                        "simctl",
+                        "privacy",
+                        deviceId,
+                        "revoke",
+                        "location-always",
+                        bundleId
+                    )
+                )
+            }
+
+            "unset" -> {
+                runCommand(
+                    listOf(
+                        "xcrun",
+                        "simctl",
+                        "privacy",
+                        deviceId,
+                        "reset",
+                        "location-always",
+                        bundleId
+                    )
+                )
+            }
+
+            else -> throw IllegalArgumentException("wrong argument value '$value' was provided for 'location' permission")
+        }
+    }
 
     private fun translatePermissionValue(value: String): String {
         return when (value) {
@@ -406,7 +516,7 @@ object LocalSimulatorUtils {
 
     data class ScreenRecording(
         val process: Process,
-        val file: File
+        val file: File,
     )
 
     fun startScreenRecording(deviceId: String): ScreenRecording {
@@ -437,6 +547,39 @@ object LocalSimulatorUtils {
         } else {
             throw IllegalStateException("screenrecord.sh file not found")
         }
+    }
+
+    fun setDeviceLanguage(deviceId: String, language: String) {
+        runCommand(
+            listOf(
+                "xcrun",
+                "simctl",
+                "spawn",
+                deviceId,
+                "defaults",
+                "write",
+                ".GlobalPreferences.plist",
+                "AppleLanguages",
+                "($language)"
+            )
+        )
+    }
+
+    fun setDeviceLocale(deviceId: String, locale: String) {
+        runCommand(
+            listOf(
+                "xcrun",
+                "simctl",
+                "spawn",
+                deviceId,
+                "defaults",
+                "write",
+                ".GlobalPreferences.plist",
+                "AppleLocale",
+                "-string",
+                locale
+            )
+        )
     }
 
     fun stopScreenRecording(screenRecording: ScreenRecording): File {

@@ -10,7 +10,9 @@ data class YamlScrollUntilVisible(
     val element: YamlElementSelectorUnion,
     val timeout: Long = ScrollUntilVisibleCommand.DEFAULT_TIMEOUT_IN_MILLIS,
     val speed: Int = ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION,
-    val visibilityPercentage: Int = ScrollUntilVisibleCommand.DEFAULT_ELEMENT_VISIBILITY_PERCENTAGE
+    val visibilityPercentage: Int = ScrollUntilVisibleCommand.DEFAULT_ELEMENT_VISIBILITY_PERCENTAGE,
+    val centerElement: Boolean = ScrollUntilVisibleCommand.DEFAULT_CENTER_ELEMENT,
+    val label: String? = null
 ) {
     fun speedToDuration(): Long {
         return (1000 * (100 - speed).toDouble() / 100).toLong() + 1
